@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pet Relive · AR dog prototype</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #dfe6ea; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { display: block; touch-action: none; position: fixed; top: 0; left: 0; z-index: 1; }
+  #camVideo { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 0; background: #000; }
+  #arOverlay { position: fixed; inset: 0; display: none; flex-direction: column; justify-content: space-between; pointer-events: none; z-index: 4;
+               padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); font-family: system-ui, -apple-system, sans-serif; }
+  #arHint { margin: 16px auto 0; background: rgba(20,24,28,0.78); color: #fff; padding: 10px 14px; border-radius: 12px; font-size: 15px; max-width: 86%; text-align: center; line-height: 1.4; }
+  #arBtns { display: flex; gap: 8px; justify-content: center; padding: 0 12px 28px; pointer-events: auto; flex-wrap: wrap; }
+  #arBtns button { background: rgba(255,255,255,0.92); font-weight: 600; padding: 14px 16px; border-radius: 14px; font-size: 15px; }
+  #arBtns #arExit { background: rgba(20,24,28,0.78); color: #fff; }
+  #ui { z-index: 3; position: fixed; top: 12px; left: 12px; width: min(330px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto;
+        background: rgba(255,255,255,0.92); border-radius: 14px; padding: 14px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.12); box-sizing: border-box; color: #1d2328; }
+  #ui.collapsed .body { display: none; }
+  #ui h1 { font-size: 17px; margin: 0; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .small { font-size: 12.5px; color: #55606a; line-height: 1.45; }
+  label { font-size: 13px; font-weight: 600; display: block; margin: 12px 0 4px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  #thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; background: #eef1f3; display: none; }
+  input[type=color] { width: 44px; height: 32px; border: none; background: none; padding: 0; }
+  input[type=range] { width: 100%; }
+  button { font: inherit; font-size: 14px; border: none; border-radius: 10px; padding: 10px 12px; cursor: pointer; background: #e9edf0; color: #1d2328; }
+  button.primary { background: #2f6fde; color: #fff; font-weight: 600; width: 100%; margin-top: 14px; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  #toggle { padding: 6px 10px; font-size: 12.5px; }
+  .btns { display: flex; gap: 8px; margin-top: 8px; }
+  .btns button { flex: 1; }
+  #status { margin-top: 10px; min-height: 1em; }
+  ul { margin: 6px 0 0; padding-left: 18px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<video id="camVideo" playsinline muted></video>
+<div id="arOverlay">
+  <div id="arHint">Move your phone slowly over the floor</div>
+  <div id="arBtns">
+    <button id="arThrow">Throw ball</button>
+    <button id="arCome">Come here</button>
+    <button id="arSit">Sit</button>
+    <button id="arExit">Exit</button>
+  </div>
+</div>
+<div id="ui">
+  <div class="head">
+    <h1>Pet Relive · prototype</h1>
+    <button id="toggle">Hide</button>
+  </div>
+  <div class="body">
+    <p class="small">Upload a dog photo to color the dog, set its size, then start AR on your phone.</p>
+
+    <label for="photo">Dog photo</label>
+    <div class="row">
+      <img id="thumb" alt="Uploaded dog">
+      <input id="photo" type="file" accept="image/*">
+    </div>
+
+    <label for="modelFile">Realistic dog model (.glb or .fbx)</label>
+    <input id="modelFile" type="file" accept=".glb,.fbx">
+    <div class="btns">
+      <button id="turnBtn" disabled>Turn model 90°</button>
+      <button id="procBtn" disabled>Use simple dog</button>
+    </div>
+    <div id="modelInfo" class="small">Load a rigged dog with walk / run / idle (and ideally sit) clips. Use in-place animations if you have the choice.</div>
+
+    <label>Coat colors (simple dog)</label>
+    <div class="row">
+      <input id="coat" type="color" value="#c8925a"><span class="small">main</span>
+      <input id="accent" type="color" value="#5a3a22"><span class="small">ears, paws, tail tip</span>
+    </div>
+
+    <label for="height">Shoulder height: <span id="heightLabel">50</span> cm</label>
+    <input id="height" type="range" min="20" max="80" value="50">
+
+    <button id="xrBtn" class="primary" disabled>Checking for AR…</button>
+    <button id="camBtn" class="primary" style="display:none;background:#3b444d">Start camera mode</button>
+    <div class="btns">
+      <button id="throwBtn">Throw ball</button>
+      <button id="resetBtn">Reset dog</button>
+    </div>
+    <label class="small" style="font-weight:400;display:flex;gap:6px;align-items:center"><input id="saver" type="checkbox" checked> Battery saver (lower frame rate in this preview)</label>
+    <div id="status" class="small"></div>
+
+    <label>How to play</label>
+    <ul class="small">
+      <li><b>Android phone (Chrome):</b> tap Start AR, move the phone slowly over the floor, then tap to place the dog. Tap the floor to call it there.</li>
+      <li>Tap the ball and flick your finger to throw it, or press Throw ball. The dog fetches it. Rub the dog with your finger to pet it.</li>
+      <li><b>iPhone:</b> iPhone browsers don't support web AR yet, so use Camera mode: the dog appears over your camera view and stays put as you turn the phone.</li>
+      <li><b>Quest 3:</b> point at the floor and pull the trigger (or pinch) to place the dog; grab the ball with grip or trigger and throw; touch the dog to pet it.</li>
+      <li><b>Here in the browser:</b> drag to orbit, tap the floor to move the dog, press and drag on the dog to pet it.</li>
+    </ul>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+const $ = id => document.getElementById(id);
+const setStatus = t => { $('status').textContent = t; };
+
+// ---------- renderer, scene, camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+const PREVIEW_PIXEL_RATIO = Math.min(window.devicePixelRatio, 1.25); // full retina resolution is the biggest heat source
+renderer.setPixelRatio(PREVIEW_PIXEL_RATIO);
+renderer.xr.setFoveation(1); // Quest: render the edges of the view at lower detail
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const previewBg = new THREE.Color(0xdfe6ea);
+scene.background = previewBg;
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50);
+const controls = new OrbitControls(camera, renderer.domElement);
+function resetPreviewCamera() {
+  camera.position.set(0.9, 1.1, 1.9);
+  controls.target.set(0, 0.25, 0);
+  controls.update();
+}
+controls.maxPolarAngle = Math.PI * 0.49;
+controls.minDistance = 0.5;
+controls.maxDistance = 6;
+resetPreviewCamera();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a96a3, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(512, 512);
+Object.assign(sun.shadow.camera, { left: -1.5, right: 1.5, top: 1.5, bottom: -1.5, near: 0.1, far: 8 });
+scene.add(sun, sun.target);
+
+// Floor at y = 0 (local-floor reference space puts the real floor here on Quest)
+const shadowFloor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.32 }));
+shadowFloor.rotation.x = -Math.PI / 2;
+shadowFloor.receiveShadow = true;
+scene.add(shadowFloor);
+const grid = new THREE.GridHelper(10, 20, 0x98a3ab, 0xc5cdd2);
+grid.position.y = 0.001;
+scene.add(grid);
+
+// ---------- materials ----------
+const coatMat = new THREE.MeshStandardMaterial({ color: 0xc8925a, roughness: 0.85 });
+const accentMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.85 });
+const darkMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.3 });
+const tongueMat = new THREE.MeshStandardMaterial({ color: 0xe0707a, roughness: 0.6 });
+
+// ---------- procedural dog ----------
+const LEG = 0.32; // hip height of the unscaled dog (m)
+const BASE_SHOULDER = 0.43; // shoulder height of the unscaled dog (m)
+
+function part(geo, mat, parent, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  parent.add(m);
+  return m;
+}
+function pivot(parent, x = 0, y = 0, z = 0) {
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  parent.add(g);
+  return g;
+}
+
+function buildDog() {
+  const root = new THREE.Group();        // stands on the floor, faces +Z
+  const hips = pivot(root, 0, LEG, 0);   // rear hip pivot; the body hangs off it
+
+  const torso = part(new THREE.CapsuleGeometry(0.11, 0.3, 6, 14), coatMat, hips, 0, 0.02, 0.2);
+  torso.rotation.x = Math.PI / 2;
+  torso.scale.set(0.9, 1, 1);
+  part(new THREE.SphereGeometry(0.115, 16, 12), coatMat, hips, 0, 0.03, 0.38);
+
+  const neck = pivot(hips, 0, 0.08, 0.42);
+  const neckMesh = part(new THREE.CapsuleGeometry(0.06, 0.1, 4, 10), coatMat, neck, 0, 0.06, 0.02);
+  neckMesh.rotation.x = 0.5;
+
+  const head = pivot(neck, 0, 0.14, 0.06);
+  part(new THREE.SphereGeometry(0.085, 18, 14), coatMat, head).scale.set(1, 0.92, 1);
+  const snout = part(new THREE.CapsuleGeometry(0.042, 0.07, 4, 12), coatMat, head, 0, -0.03, 0.09);
+  snout.rotation.x = Math.PI / 2;
+  part(new THREE.SphereGeometry(0.021, 12, 10), darkMat, head, 0, -0.012, 0.157);
+  part(new THREE.SphereGeometry(0.013, 10, 8), darkMat, head, -0.036, 0.022, 0.07);
+  part(new THREE.SphereGeometry(0.013, 10, 8), darkMat, head, 0.036, 0.022, 0.07);
+  const tongue = part(new THREE.BoxGeometry(0.03, 0.006, 0.05), tongueMat, head, 0, -0.066, 0.1);
+  tongue.visible = false;
+
+  const ears = [-1, 1].map(side => {
+    const ear = pivot(head, side * 0.058, 0.055, -0.01);
+    const m = part(new THREE.SphereGeometry(0.04, 12, 10), accentMat, ear, side * 0.012, -0.035, 0);
+    m.scale.set(0.42, 1, 0.8);
+    return ear;
+  });
+  const mouth = pivot(head, 0, -0.07, 0.13);
+
+  // tail: chain of 3 segments pointing backwards (-Z)
+  const tailSegs = [];
+  let tp = pivot(hips, 0, 0.07, -0.07);
+  for (let i = 0; i < 3; i++) {
+    const seg = i === 0 ? tp : pivot(tailSegs[i - 1], 0, 0, -0.065);
+    const m = part(new THREE.CapsuleGeometry(0.022 - 0.004 * i, 0.045, 4, 8), i === 2 ? accentMat : coatMat, seg, 0, 0, -0.035);
+    m.rotation.x = Math.PI / 2;
+    tailSegs.push(seg);
+  }
+
+  // legs; trot = diagonal pairs move together
+  const legDefs = [
+    { x: -0.065, z: 0.38, front: true, phase: 0 },
+    { x: 0.065, z: 0.38, front: true, phase: Math.PI },
+    { x: -0.065, z: 0.0, front: false, phase: Math.PI },
+    { x: 0.065, z: 0.0, front: false, phase: 0 },
+  ];
+  const legs = legDefs.map(d => {
+    const hip = pivot(hips, d.x, -0.01, d.z);
+    part(new THREE.CapsuleGeometry(0.034, 0.11, 4, 10), coatMat, hip, 0, -0.08, 0);
+    const knee = pivot(hip, 0, -0.155, 0);
+    part(new THREE.CapsuleGeometry(0.026, 0.11, 4, 10), coatMat, knee, 0, -0.075, 0);
+    const paw = part(new THREE.SphereGeometry(0.032, 12, 8), accentMat, knee, 0, -0.143, 0.012);
+    paw.scale.set(1, 0.6, 1.3);
+    return { ...d, hip, knee };
+  });
+
+  const backPt = pivot(hips, 0, 0.13, 0.2);
+  return { root, hips, neck, head, ears, mouth, tongue, tailSegs, legs, backPt };
+}
+
+const model = buildDog();
+const dogRoot = new THREE.Group(); // placement, facing and size of whichever dog is active
+dogRoot.add(model.root);
+scene.add(dogRoot);
+let meshDog = null; // set when a realistic model is loaded
+
+const dog = {
+  placed: false, state: 'idle', timer: 2, target: new THREE.Vector3(), moveSpeed: 0,
+  speed: 0, yaw: 0, phase: 0, sitW: 0, happy: 0.4, wagT: 0, petT: 0, scale: 1, popT: 1,
+  lookYaw: 0, lookPitch: 0, petPoint: null, hapticT: 0,
+};
+
+function heightCm() { return Number($('height').value); }
+function applyScale() {
+  dog.scale = (heightCm() / 100) / BASE_SHOULDER;
+  const pop = 1 - Math.pow(1 - Math.min(1, dog.popT), 3);
+  dogRoot.scale.setScalar(dog.scale * Math.max(0.01, pop));
+}
+
+const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
+const xrActive = () => renderer.xr.isPresenting;
+let floorY = 0;          // height of the real floor in the current space (0 in the preview)
+let xrMode = null;       // 'phone' or 'headset' while in WebXR
+let camMode = false;     // iPhone fallback: camera feed + phone orientation
+let hitSource = null, centerHit = null, phoneTouch = null, phonePet = null;
+
+function userPos(out = new THREE.Vector3()) {
+  camera.getWorldPosition(out);
+  if (!xrActive() && !camMode) out.lerp(controls.target, 0.35); // in preview, "you" stand a bit in front of the camera
+  out.y = floorY;
+  return out;
+}
+function pointNear(center, from, dist) {
+  const dir = tmpV2.subVectors(from, center).setY(0);
+  if (dir.lengthSq() < 1e-4) dir.set(0, 0, 1);
+  dir.normalize();
+  return new THREE.Vector3(center.x + dir.x * dist, floorY, center.z + dir.z * dist);
+}
+function angleDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
+function horizDist(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
+
+function placeDog(p) {
+  const u = userPos();
+  dogRoot.position.set(p.x, floorY, p.z);
+  dog.yaw = Math.atan2(u.x - p.x, u.z - p.z);
+  dog.placed = true;
+  dogRoot.visible = true;
+  dog.state = 'idle';
+  dog.timer = 2;
+  dog.speed = 0;
+  dog.popT = 0;
+  dog.happy = 0.8;
+  if (!ball.active && !ball.held) {
+    ball.pos.set(p.x + 0.35 * Math.cos(dog.yaw), floorY + 0.2, p.z - 0.35 * Math.sin(dog.yaw));
+    ball.vel.set(0, 0, 0);
+    ball.active = true;
+  }
+  bark();
+}
+function goTo(p, speed, state = 'walk') {
+  dog.target.set(p.x, 0, p.z);
+  dog.moveSpeed = speed;
+  dog.state = state;
+}
+
+const WALK = 0.75, TROT = 1.25, RUN = 2.6;
+
+function updateDog(dt, t) {
+  if (!dog.placed) return;
+  const pos = dogRoot.position;
+  const s = dog.scale;
+  const user = userPos();
+
+  if (dog.popT < 1) { dog.popT += dt / 0.35; }
+  applyScale();
+
+  // petting
+  const pet = detectPetting();
+  dog.petPoint = pet;
+  if (pet) { dog.petT += dt; dog.happy = Math.min(1, dog.happy + dt * 0.6); }
+  else dog.petT = Math.max(0, dog.petT - dt * 2);
+  dog.happy = Math.max(0.3, dog.happy - dt * 0.025);
+
+  // behavior
+  let desired = 0;
+  const distT = horizDist(pos, dog.target);
+  switch (dog.state) {
+    case 'idle': {
+      dog.timer -= dt;
+      if (pet && dog.petT > 0.6) { dog.state = 'sit'; dog.timer = 3; break; }
+      if (dog.timer <= 0) {
+        const r = Math.random();
+        if (horizDist(pos, user) > 2.2) goTo(pointNear(user, pos, 0.5 + 0.3 * s), WALK);
+        else if (r < 0.35) { dog.state = 'sit'; dog.timer = 3 + Math.random() * 4; }
+        else if (r < 0.75) {
+          const a = Math.random() * Math.PI * 2, d = 0.3 + Math.random() * 0.6;
+          goTo(new THREE.Vector3(pos.x + Math.cos(a) * d, 0, pos.z + Math.sin(a) * d), WALK * 0.7);
+        } else dog.timer = 2 + Math.random() * 3;
+        if (dog.state === 'idle' && dog.timer <= 0) dog.timer = 3 + Math.random() * 3;
+      }
+      break;
+    }
+    case 'sit':
+      if (!pet) dog.timer -= dt;
+      if (dog.timer <= 0) { dog.state = 'idle'; dog.timer = 2 + Math.random() * 3; }
+      break;
+    case 'walk':
+      desired = dog.moveSpeed;
+      if (distT < 0.08) { dog.state = 'idle'; dog.timer = 2 + Math.random() * 3; }
+      break;
+    case 'watch':
+      dog.timer -= dt;
+      if (dog.timer <= 0) dog.state = 'chase';
+      break;
+    case 'chase': {
+      if (ball.held) { dog.state = 'idle'; dog.timer = 1; break; }
+      dog.target.set(ball.pos.x, 0, ball.pos.z);
+      desired = RUN;
+      getMouth(tmpV);
+      const near = horizDist(tmpV, ball.pos) < 0.08 + 0.06 * s || horizDist(pos, ball.pos) < 0.12 * s;
+      if (near && ball.pos.y - floorY < 0.25 * s + 0.06 && ball.vel.length() < 4) {
+        ball.carried = true;
+        dog.state = 'return';
+      }
+      break;
+    }
+    case 'return':
+      dog.target.copy(pointNear(user, pos, 0.4 + 0.25 * s));
+      desired = TROT;
+      if (horizDist(pos, dog.target) < 0.1) {
+        dropBall();
+        dog.state = 'sit';
+        dog.timer = 4;
+        dog.happy = 1;
+        bark();
+      }
+      break;
+  }
+
+  // locomotion
+  const toT = tmpV.subVectors(dog.target, pos).setY(0);
+  const dist = toT.length();
+  let facing = 1;
+  if (desired > 0 && dist > 0.02) {
+    const want = Math.atan2(toT.x, toT.z);
+    const diff = angleDiff(want, dog.yaw);
+    dog.yaw += THREE.MathUtils.clamp(diff, -dt * 6, dt * 6);
+    facing = Math.max(0, Math.cos(diff));
+    if (dog.state !== 'chase') desired = Math.min(desired, dist * 3 + 0.15);
+  } else if (dog.state === 'sit' || dog.state === 'idle') {
+    // slowly turn to face the user when not busy
+    const want = Math.atan2(user.x - pos.x, user.z - pos.z);
+    const diff = angleDiff(want, dog.yaw);
+    if (Math.abs(diff) > 0.9 && dog.sitW < 0.2) dog.yaw += THREE.MathUtils.clamp(diff, -dt * 1.5, dt * 1.5);
+  }
+  const speedScale = 0.55 + 0.45 * Math.min(1.6, s); // small dogs move a bit slower
+  dog.speed = THREE.MathUtils.damp(dog.speed, desired * facing * speedScale, 6, dt);
+  if (desired === 0 && dog.speed < 0.01) dog.speed = 0;
+  pos.x += Math.sin(dog.yaw) * dog.speed * dt;
+  pos.z += Math.cos(dog.yaw) * dog.speed * dt;
+  dogRoot.rotation.y = dog.yaw;
+
+  // shared by both dog types: wag clock and what the dog looks at
+  dog.wagT += dt * (5 + dog.happy * 12);
+  let look;
+  if ((dog.state === 'watch' || dog.state === 'chase') && ball.active) look = ball.pos;
+  else if (pet) look = pet;
+  else if (ball.held) look = ball.pos;
+  else look = camera.getWorldPosition(new THREE.Vector3());
+
+  // shadow light follows the dog
+  sun.position.set(pos.x + 0.7, pos.y + 3, pos.z + 0.5);
+  sun.target.position.copy(pos);
+
+  if (meshDog) { poseMesh(dt, t, look); return; }
+
+  // pose: sit blend
+  const sitTarget = dog.state === 'sit' ? 1 : 0;
+  dog.sitW = THREE.MathUtils.damp(dog.sitW, sitTarget, 5, dt);
+  const sitW = dog.sitW, A = 0.425;
+
+  // gait
+  const stride = 0.33 * s;
+  dog.phase += dt * (dog.speed / Math.max(0.05, stride)) * Math.PI;
+  const moving = Math.min(1, dog.speed / (0.35 * s + 0.01));
+  const amp = (0.45 + 0.3 * Math.min(1, dog.speed / (1.6 * s + 0.01))) * moving;
+  for (const leg of model.legs) {
+    const ph = dog.phase + leg.phase;
+    const swing = Math.sin(ph) * amp;
+    const lift = Math.max(0, -Math.cos(ph)) * amp * 1.5;
+    if (leg.front) {
+      leg.hip.rotation.x = swing * (1 - sitW) + A * sitW;
+      leg.knee.rotation.x = lift * (1 - sitW);
+    } else {
+      leg.hip.rotation.x = swing * (1 - sitW) - 0.7 * sitW;
+      leg.knee.rotation.x = lift * (1 - sitW) + 2.0 * sitW;
+    }
+  }
+  const bob = Math.abs(Math.sin(dog.phase)) * 0.014 * amp;
+  model.hips.position.y = LEG - 0.165 * sitW + bob;
+  model.hips.rotation.x = -A * sitW;
+  const breathe = Math.sin(t * (dog.speed > 0.5 ? 9 : 2.2)) * 0.012;
+  model.hips.children[0].scale.set(0.9 + breathe, 1, 1 + breathe);
+
+  // tail wag
+  const wagAmp = 0.12 + dog.happy * 0.55;
+  model.tailSegs.forEach((seg, i) => {
+    seg.rotation.y = Math.sin(dog.wagT - i * 0.7) * wagAmp * (i === 0 ? 1 : 0.6);
+    seg.rotation.x = i === 0 ? 0.45 + dog.happy * 0.45 : -0.18;
+  });
+
+  // ears
+  model.ears.forEach((ear, i) => {
+    const side = i === 0 ? -1 : 1;
+    ear.rotation.z = side * (0.2 + 0.08 * Math.sin(t * 1.3 + i)) - side * 0.1 * dog.happy;
+    ear.rotation.x = -0.25 * dog.happy * (pet ? 1 : 0.4);
+  });
+  model.tongue.visible = dog.speed > 1.0 || (dog.state === 'sit' && dog.happy > 0.7 && !ball.carried);
+
+  // head look
+  let yaw = 0, pitch = 0;
+  if (look) {
+    const local = model.hips.worldToLocal(look.clone()).sub(model.neck.position);
+    yaw = THREE.MathUtils.clamp(Math.atan2(local.x, local.z), -0.9, 0.9);
+    pitch = THREE.MathUtils.clamp(Math.atan2(local.y - 0.14, Math.hypot(local.x, local.z)), -0.7, 0.6);
+    if (dog.state === 'walk' || dog.state === 'return') { yaw *= 0.4; pitch *= 0.4; }
+  }
+  dog.lookYaw = THREE.MathUtils.damp(dog.lookYaw, yaw, 5, dt);
+  dog.lookPitch = THREE.MathUtils.damp(dog.lookPitch, pitch, 5, dt);
+  model.neck.rotation.y = dog.lookYaw;
+  model.head.rotation.x = -dog.lookPitch;
+  model.head.rotation.z = pet ? Math.sin(t * 2.2) * 0.18 : THREE.MathUtils.damp(model.head.rotation.z, 0, 4, dt);
+}
+
+// ---------- realistic dog: load a rigged model and drive its clips ----------
+const UNIT_HEIGHT = 0.63; // head-top height of the unscaled simple dog; loaded models are fitted to this
+const NOT_END = /end|nub|tip|top|_null/i;
+
+async function loadModelFile(file) {
+  const name = file.name.toLowerCase();
+  $('modelInfo').textContent = 'Loading ' + file.name + '…';
+  try {
+    const buf = await file.arrayBuffer();
+    let obj, clips;
+    if (name.endsWith('.fbx')) {
+      obj = new FBXLoader().parse(buf, '');
+      clips = obj.animations || [];
+    } else {
+      const gltf = await new Promise((res, rej) => new GLTFLoader().parse(buf, '', res, rej));
+      obj = gltf.scene;
+      clips = gltf.animations || [];
+    }
+    setupMeshDog(obj, clips, file.name);
+  } catch (err) {
+    $('modelInfo').textContent = 'Could not load that file: ' + (err && err.message ? err.message : err) + '. Use a single .glb, or an .fbx with embedded textures.';
+  }
+}
+
+function setupMeshDog(obj, clips, label) {
+  removeMeshDog();
+  obj.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.frustumCulled = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(mt => { if (mt && mt.map) mt.map.colorSpace = THREE.SRGBColorSpace; });
+    }
+  });
+  let tris = 0;
+  obj.traverse(o => {
+    if (o.isMesh && o.geometry) {
+      const g = o.geometry;
+      tris += (g.index ? g.index.count : (g.attributes.position ? g.attributes.position.count : 0)) / 3;
+    }
+  });
+  const bones = [];
+  obj.traverse(o => { if (o.isBone) bones.push(o); });
+  const find = re => bones.find(b => re.test(b.name) && !NOT_END.test(b.name));
+  const head = find(/head/i);
+  const neck = find(/neck/i);
+  const tails = bones.filter(b => /tail/i.test(b.name) && !NOT_END.test(b.name)).slice(0, 4);
+  const rootBone = bones.find(b => !(b.parent && b.parent.isBone)) || null;
+
+  const mixer = new THREE.AnimationMixer(obj);
+  const pick = res => { for (const re of res) { const c = clips.find(cl => re.test(cl.name)); if (c) return c; } return null; };
+  const roles = {
+    idle: pick([/idle|stand|breath/i]),
+    walk: pick([/walk/i]),
+    run: pick([/run|gallop|sprint|trot/i]),
+    sit: pick([/(^|[^a-z])sit/i]),
+    lie: pick([/(^|[^a-z])(lay|lie|lying|sleep|rest)/i]),
+  };
+  if (!roles.walk && !roles.run && !roles.idle && clips.length) roles.walk = clips[0];
+  const actions = {};
+  for (const k in roles) {
+    if (!roles[k]) continue;
+    const a = mixer.clipAction(roles[k]);
+    if (k === 'sit' || k === 'lie') { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+    actions[k] = a;
+  }
+  let frozenIdle = false;
+  if (!actions.idle && (actions.walk || actions.run)) { actions.idle = actions.walk || actions.run; frozenIdle = true; }
+
+  const orient = new THREE.Group();
+  orient.add(obj);
+  const fit = new THREE.Group();
+  fit.add(orient);
+
+  meshDog = { obj, orient, fit, mixer, actions, roles, head, neck, tails, rootBone, frozenIdle, current: null,
+              fitBase: new THREE.Vector3(), rest: new THREE.Vector3(), len: 0.5, label };
+  if (actions.idle) { actions.idle.play(); meshDog.current = 'idle'; if (frozenIdle) actions.idle.timeScale = 0; }
+  mixer.update(0);
+
+  // face the head toward +Z if we can find it
+  if (head) {
+    fit.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(orient, true);
+    const c = box.getCenter(new THREE.Vector3());
+    const hp = head.getWorldPosition(new THREE.Vector3());
+    const dx = hp.x - c.x, dz = hp.z - c.z;
+    if (Math.hypot(dx, dz) > 1e-4) orient.rotation.y = -Math.atan2(dx, dz);
+  }
+  refitMeshDog();
+  model.root.visible = false;
+  dogRoot.add(fit);
+  $('turnBtn').disabled = false;
+  $('procBtn').disabled = false;
+
+  const found = Object.keys(roles).filter(k => roles[k]).map(k => `${k} (“${roles[k].name}”)`);
+  const missing = ['idle', 'walk', 'run', 'sit'].filter(k => !roles[k]);
+  $('modelInfo').textContent = `Loaded ${label}. ${clips.length} clip(s). Using: ${found.join(', ') || 'none'}.` +
+    (missing.length ? ` Missing: ${missing.join(', ')} (the dog will use what it has).` : '') +
+    (head ? '' : ' No head bone found, so it won’t turn its head.') +
+    ' If it faces the wrong way, press Turn model 90°.' +
+    ` ${Math.round(tris / 1000)}k triangles` + (tris > 60000 ? ' — heavy: this will heat up your computer and stutter on the Quest; aim for under 30k.' : '.');
+}
+
+function refitMeshDog() {
+  const m = meshDog;
+  const parent = m.fit.parent; // measure without the dog's placement applied
+  if (parent) parent.remove(m.fit);
+  m.fit.position.set(0, 0, 0);
+  m.fit.scale.setScalar(1);
+  m.fit.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(m.orient, true);
+  const size = box.getSize(new THREE.Vector3());
+  const c = box.getCenter(new THREE.Vector3());
+  const k = UNIT_HEIGHT / Math.max(1e-4, size.y);
+  m.fit.scale.setScalar(k);
+  m.fitBase.set(-c.x * k, -box.min.y * k, -c.z * k);
+  m.fit.position.copy(m.fitBase);
+  m.len = size.z * k;
+  m.fit.updateMatrixWorld(true);
+  if (m.rootBone) m.fit.worldToLocal(m.rootBone.getWorldPosition(m.rest));
+  if (parent) parent.add(m.fit);
+}
+
+function removeMeshDog() {
+  if (!meshDog) return;
+  meshDog.mixer.stopAllAction();
+  dogRoot.remove(meshDog.fit);
+  meshDog = null;
+  model.root.visible = true;
+  $('turnBtn').disabled = true;
+  $('procBtn').disabled = true;
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+const qA = new THREE.Quaternion(), qB = new THREE.Quaternion();
+function rotateBoneWorld(bone, axisWorld, angle) {
+  if (!bone || !bone.parent || Math.abs(angle) < 1e-5) return;
+  bone.parent.getWorldQuaternion(qA);
+  const axis = axisWorld.clone().applyQuaternion(qA.invert()).normalize();
+  qB.setFromAxisAngle(axis, angle);
+  bone.quaternion.premultiply(qB);
+  bone.updateMatrixWorld(true);
+}
+
+function poseMesh(dt, t, look) {
+  const m = meshDog, s = dog.scale, A = m.actions;
+  // pick a clip from what the dog is doing
+  let want = 'idle', ts = 1;
+  if (dog.state === 'sit' && (A.sit || A.lie)) want = A.sit ? 'sit' : 'lie';
+  else if (dog.speed > 0.06) {
+    if (A.run && (dog.speed > 1.4 || !A.walk)) { want = 'run'; ts = dog.speed / (2.0 * Math.max(0.5, s)); }
+    else if (A.walk) { want = 'walk'; ts = dog.speed / (0.8 * Math.max(0.5, s)); }
+  }
+  if (!A[want]) want = A.idle ? 'idle' : null;
+  if (want && want !== m.current) {
+    const next = A[want], prev = m.current ? A[m.current] : null;
+    if (next !== prev) {
+      next.reset();
+      next.setEffectiveWeight(1);
+      next.play();
+      if (prev) next.crossFadeFrom(prev, 0.25, false);
+    }
+    m.current = want;
+  }
+  const act = m.current ? A[m.current] : null;
+  if (act) {
+    if (m.current === 'walk' || m.current === 'run') act.timeScale = THREE.MathUtils.clamp(ts, 0.4, 2);
+    else act.timeScale = (m.current === 'idle' && m.frozenIdle) ? 0 : 1;
+  }
+  m.mixer.update(dt);
+
+  // keep root motion from sliding the model away from where the dog actually is
+  m.fit.position.copy(m.fitBase);
+  dogRoot.updateMatrixWorld(true);
+  if (m.rootBone) {
+    const p = m.fit.worldToLocal(m.rootBone.getWorldPosition(tmpV2));
+    m.fit.position.x -= (p.x - m.rest.x) * m.fit.scale.x;
+    m.fit.position.z -= (p.z - m.rest.z) * m.fit.scale.x;
+    dogRoot.updateMatrixWorld(true);
+  }
+
+  // head turns toward what it watches, layered on top of the clip
+  const hb = m.neck || m.head;
+  let yaw = 0, pitch = 0;
+  if (look && hb) {
+    const local = dogRoot.worldToLocal(look.clone());
+    const hl = dogRoot.worldToLocal(hb.getWorldPosition(new THREE.Vector3()));
+    const d = local.sub(hl);
+    yaw = THREE.MathUtils.clamp(Math.atan2(d.x, d.z), -0.75, 0.75);
+    pitch = THREE.MathUtils.clamp(Math.atan2(d.y, Math.hypot(d.x, d.z)), -0.45, 0.45);
+    if (dog.speed > 0.3) { yaw *= 0.35; pitch *= 0.35; }
+  }
+  dog.lookYaw = THREE.MathUtils.damp(dog.lookYaw, yaw, 5, dt);
+  dog.lookPitch = THREE.MathUtils.damp(dog.lookPitch, pitch, 5, dt);
+  const right = new THREE.Vector3(-Math.cos(dog.yaw), 0, Math.sin(dog.yaw));
+  if (m.neck && m.head) {
+    rotateBoneWorld(m.neck, UP, dog.lookYaw * 0.55);
+    rotateBoneWorld(m.neck, right, dog.lookPitch * 0.5);
+    rotateBoneWorld(m.head, UP, dog.lookYaw * 0.45);
+    rotateBoneWorld(m.head, right, dog.lookPitch * 0.5);
+  } else if (hb) {
+    rotateBoneWorld(hb, UP, dog.lookYaw);
+    rotateBoneWorld(hb, right, dog.lookPitch);
+  }
+  if (dog.petPoint && m.head) {
+    const fwd = new THREE.Vector3(Math.sin(dog.yaw), 0, Math.cos(dog.yaw));
+    rotateBoneWorld(m.head, fwd, Math.sin(t * 2.2) * 0.15);
+  }
+
+  // tail wag on top of the clip, stronger when happy
+  const wagAmp = (0.1 + dog.happy * 0.4) / Math.max(1, m.tails.length * 0.7);
+  m.tails.forEach((b, i) => rotateBoneWorld(b, UP, Math.sin(dog.wagT - i * 0.6) * wagAmp));
+}
+
+// points on whichever dog is active
+function getHead(out) {
+  if (meshDog) {
+    if (meshDog.head) return meshDog.head.getWorldPosition(out);
+    return dogRoot.localToWorld(out.set(0, UNIT_HEIGHT * 0.82, meshDog.len * 0.42));
+  }
+  return model.head.getWorldPosition(out);
+}
+function getBack(out) {
+  if (meshDog) return dogRoot.localToWorld(out.set(0, UNIT_HEIGHT * 0.66, 0));
+  return model.backPt.getWorldPosition(out);
+}
+function getMouth(out) {
+  if (meshDog) {
+    if (meshDog.head) {
+      meshDog.head.getWorldPosition(out);
+      const s = dog.scale;
+      out.x += Math.sin(dog.yaw) * 0.09 * s;
+      out.z += Math.cos(dog.yaw) * 0.09 * s;
+      out.y -= 0.04 * s;
+      return out;
+    }
+    return dogRoot.localToWorld(out.set(0, UNIT_HEIGHT * 0.7, meshDog.len * 0.5));
+  }
+  return model.mouth.getWorldPosition(out);
+}
+
+$('modelFile').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (f) loadModelFile(f);
+  e.target.value = '';
+});
+$('turnBtn').addEventListener('click', () => {
+  if (!meshDog) return;
+  meshDog.orient.rotation.y += Math.PI / 2;
+  refitMeshDog();
+});
+$('procBtn').addEventListener('click', () => {
+  removeMeshDog();
+  $('modelInfo').textContent = 'Back to the simple dog.';
+});
+
+// ---------- ball ----------
+const BALL_R = 0.035;
+const ball = {
+  mesh: new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 20, 16), new THREE.MeshStandardMaterial({ color: 0xd4f03c, roughness: 0.65 })),
+  pos: new THREE.Vector3(0, -1, 0), vel: new THREE.Vector3(), held: null, carried: false, active: false, hist: [],
+};
+ball.mesh.castShadow = true;
+scene.add(ball.mesh);
+
+function grabBall(holder) {
+  if (ball.carried) return false;
+  ball.held = holder;
+  ball.active = true;
+  ball.hist = [];
+  if (dog.state === 'chase' || dog.state === 'watch') { dog.state = 'idle'; dog.timer = 1; }
+  pulse(holder, 0.4, 40);
+  return true;
+}
+function releaseBall(velocity) {
+  ball.held = null;
+  ball.vel.copy(velocity);
+  if (ball.vel.length() > 9) ball.vel.setLength(9);
+  if (dog.placed) { dog.state = 'watch'; dog.timer = 0.35; }
+}
+function dropBall() {
+  ball.carried = false;
+  ball.active = true;
+  ball.vel.set(Math.sin(dog.yaw) * 0.3, 0.4, Math.cos(dog.yaw) * 0.3);
+}
+function updateBall(dt) {
+  if (ball.carried) {
+    getMouth(ball.pos);
+    ball.vel.set(0, 0, 0);
+  } else if (ball.held) {
+    holdPos(ball.held, ball.pos);
+    const now = performance.now() / 1000;
+    ball.hist.push({ p: ball.pos.clone(), t: now });
+    while (ball.hist.length > 2 && now - ball.hist[0].t > 0.1) ball.hist.shift();
+  } else if (ball.active) {
+    ball.vel.y -= 9.8 * dt;
+    ball.pos.addScaledVector(ball.vel, dt);
+    if (ball.pos.y < floorY + BALL_R) {
+      ball.pos.y = floorY + BALL_R;
+      if (ball.vel.y < -0.5) { ball.vel.y *= -0.55; ball.vel.x *= 0.85; ball.vel.z *= 0.85; }
+      else {
+        ball.vel.y = 0;
+        const k = Math.max(0, 1 - 1.8 * dt);
+        ball.vel.x *= k; ball.vel.z *= k;
+      }
+    }
+    // keep the ball inside a 3.5 m play circle around the user (no real walls in this prototype)
+    const u = userPos();
+    const dx = ball.pos.x - u.x, dz = ball.pos.z - u.z, d = Math.hypot(dx, dz);
+    if (d > 3.5) {
+      ball.pos.x = u.x + dx / d * 3.5; ball.pos.z = u.z + dz / d * 3.5;
+      const vn = (ball.vel.x * dx + ball.vel.z * dz) / d;
+      if (vn > 0) { ball.vel.x -= 1.4 * vn * dx / d; ball.vel.z -= 1.4 * vn * dz / d; }
+    }
+  }
+  ball.mesh.visible = ball.active || ball.held || ball.carried;
+  ball.mesh.position.copy(ball.pos);
+}
+function throwVelocity() {
+  const h = ball.hist;
+  if (h.length < 2) return new THREE.Vector3();
+  const a = h[0], b = h[h.length - 1];
+  const dt = b.t - a.t;
+  if (dt < 0.01) return new THREE.Vector3();
+  return b.p.clone().sub(a.p).divideScalar(dt).multiplyScalar(1.15);
+}
+
+// ---------- XR controllers and hands ----------
+const inputs = [];
+const tmpMat = new THREE.Matrix4();
+const ray = new THREE.Ray();
+
+function makeReticle() {
+  const r = new THREE.Mesh(new THREE.RingGeometry(0.035, 0.05, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+  r.rotation.x = -Math.PI / 2;
+  r.visible = false;
+  scene.add(r);
+  return r;
+}
+for (let i = 0; i < 2; i++) {
+  const c = renderer.xr.getController(i);
+  const g = renderer.xr.getControllerGrip(i);
+  const h = renderer.xr.getHand(i);
+  scene.add(c, g, h);
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+  line.scale.z = 2.5;
+  line.visible = false;
+  c.add(line);
+  const st = { c, g, h, line, reticle: makeReticle(), src: null };
+  c.addEventListener('connected', e => { st.src = e.data; });
+  c.addEventListener('disconnected', () => { st.src = null; if (ball.held === st) releaseBall(new THREE.Vector3()); });
+  c.addEventListener('selectstart', () => onSelectStart(st));
+  c.addEventListener('selectend', () => onSelectEnd(st));
+  c.addEventListener('squeezestart', () => { if (!ball.held) grabBall(st); });
+  c.addEventListener('squeezeend', () => { if (ball.held === st) releaseBall(throwVelocity()); });
+  inputs.push(st);
+}
+
+function joint(st, name) {
+  const j = st.h.joints && st.h.joints[name];
+  return j && j.visible ? j : null;
+}
+function holdPos(st, out) {
+  if (xrMode === 'phone') { // the ball rides 45 cm out along your finger's ray
+    const r = controllerRay(st);
+    return out.copy(r.origin).addScaledVector(r.direction, 0.45);
+  }
+  if (st.src && st.src.hand) {
+    const a = joint(st, 'index-finger-tip'), b = joint(st, 'thumb-tip');
+    if (a && b) {
+      a.getWorldPosition(out);
+      return out.add(b.getWorldPosition(tmpV2)).multiplyScalar(0.5);
+    }
+  }
+  return (st.g.visible ? st.g : st.c).getWorldPosition(out);
+}
+function controllerRay(st) {
+  tmpMat.identity().extractRotation(st.c.matrixWorld);
+  ray.origin.setFromMatrixPosition(st.c.matrixWorld);
+  ray.direction.set(0, 0, -1).applyMatrix4(tmpMat).normalize();
+  return ray;
+}
+function floorHit(r) {
+  if (r.direction.y > -0.02) return null;
+  const tHit = (floorY - r.origin.y) / r.direction.y;
+  if (tHit < 0 || tHit > 12) return null;
+  return r.origin.clone().addScaledVector(r.direction, tHit);
+}
+function pulse(st, strength, ms) {
+  try {
+    const act = st && st.src && st.src.gamepad && st.src.gamepad.hapticActuators && st.src.gamepad.hapticActuators[0];
+    if (act) act.pulse(strength, ms);
+  } catch (e) { /* haptics are optional */ }
+}
+
+function onSelectEnd(st) {
+  if (xrMode === 'phone') {
+    phoneTouch = null; phonePet = null;
+    if (ball.held === st) {
+      const v = throwVelocity().multiplyScalar(3);
+      if (v.length() > 0.8) { v.y = Math.max(v.y, 0) + 1.6; if (v.length() > 6) v.setLength(6); }
+      else v.set(0, 0, 0);
+      releaseBall(v);
+    }
+    return;
+  }
+  if (ball.held === st) releaseBall(throwVelocity());
+}
+function onPhoneTapStart(st) {
+  initAudio();
+  if (!dog.placed) {
+    if (!centerHit) return;
+    floorY = centerHit.y;
+    placeDog(centerHit);
+    setArHint('Tap the floor to call your dog · tap the ball and flick to throw · rub the dog to pet it');
+    return;
+  }
+  phoneTouch = st;
+  const r = controllerRay(st);
+  if (ball.active && !ball.carried && r.distanceSqToPoint(ball.pos) < 0.12 * 0.12) { grabBall(st); return; }
+  raycaster.ray.copy(r);
+  const hits = raycaster.intersectObject(dogRoot, true);
+  if (hits.length) { phonePet = hits[0].point; return; }
+  const hit = floorHit(r);
+  if (hit) goTo(hit, dog.state === 'return' ? TROT : WALK);
+}
+function onSelectStart(st) {
+  if (xrMode === 'phone') { onPhoneTapStart(st); return; }
+  initAudio();
+  if (ball.held) return;
+  const hp = holdPos(st, new THREE.Vector3());
+  if (ball.active && !ball.carried && hp.distanceTo(ball.pos) < 0.18) { grabBall(st); return; }
+  const r = controllerRay(st);
+  if (ball.active && !ball.carried && r.distanceSqToPoint(ball.pos) < 0.15 * 0.15 && r.origin.distanceTo(ball.pos) < 6) {
+    grabBall(st); // ball flies to your hand
+    return;
+  }
+  const hit = floorHit(r);
+  if (!hit) return;
+  if (!dog.placed) { placeDog(hit); showHint(HINT_PLAY, 12); }
+  else goTo(hit, dog.state === 'return' ? TROT : WALK);
+}
+
+const centerReticle = makeReticle();
+function updateInputs() {
+  if (xrMode === 'phone') {
+    for (const st of inputs) { st.line.visible = false; st.reticle.visible = false; }
+    centerReticle.visible = !dog.placed && !!centerHit;
+    if (centerReticle.visible) centerReticle.position.copy(centerHit).setY(centerHit.y + 0.003);
+    if (!dog.placed) setArHint(centerHit ? 'Tap to place your dog here' : 'Move your phone slowly over the floor');
+    if (phoneTouch && ball.held !== phoneTouch) {
+      raycaster.ray.copy(controllerRay(phoneTouch));
+      const hits = raycaster.intersectObject(dogRoot, true);
+      phonePet = hits.length ? hits[0].point : null;
+    }
+    return;
+  }
+  centerReticle.visible = false;
+  for (const st of inputs) {
+    const live = xrActive() && !!st.src;
+    st.line.visible = live && !(st.src && st.src.hand);
+    st.reticle.visible = false;
+    if (!live || ball.held === st) continue;
+    const hit = floorHit(controllerRay(st));
+    if (hit) { st.reticle.position.copy(hit).setY(floorY + 0.003); st.reticle.visible = true; }
+  }
+}
+
+// petting: any fingertip / controller near the head or back
+const PET_JOINTS = ['index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'middle-finger-metacarpal'];
+const headW = new THREE.Vector3(), backW = new THREE.Vector3();
+let previewPet = null;
+function detectPetting() {
+  if (!xrActive()) return previewPet;
+  if (xrMode === 'phone') return phonePet;
+  getHead(headW);
+  getBack(backW);
+  const s = dog.scale;
+  for (const st of inputs) {
+    if (!st.src || ball.held === st) continue;
+    const pts = [];
+    if (st.src.hand) {
+      for (const n of PET_JOINTS) { const j = joint(st, n); if (j) pts.push(j.getWorldPosition(new THREE.Vector3())); }
+    } else pts.push((st.g.visible ? st.g : st.c).getWorldPosition(new THREE.Vector3()));
+    for (const p of pts) {
+      if (p.distanceTo(headW) < 0.11 * s + 0.04 || p.distanceTo(backW) < 0.15 * s + 0.05) {
+        dog.hapticT -= 1 / 60;
+        if (dog.hapticT <= 0) { pulse(st, 0.15, 25); dog.hapticT = 0.3; }
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+// ---------- floating hint panel (no HTML in XR) ----------
+const HINT_PLACE = ['Point at the floor and pull the', 'trigger (or pinch) to place your dog'];
+const HINT_PLAY = ['Point at the ball + trigger to grab it,', 'let go mid-swing to throw.', 'Point at the floor to call the dog.', 'Touch its head or back to pet it.'];
+const hintCanvas = document.createElement('canvas');
+hintCanvas.width = 1024; hintCanvas.height = 300;
+const hintTex = new THREE.CanvasTexture(hintCanvas);
+hintTex.colorSpace = THREE.SRGBColorSpace;
+const hint = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.18), new THREE.MeshBasicMaterial({ map: hintTex, transparent: true, depthTest: false }));
+hint.renderOrder = 10;
+hint.visible = false;
+scene.add(hint);
+let hintTime = 0, hintPlaced = false;
+function showHint(lines, seconds) {
+  const cx = hintCanvas.getContext('2d');
+  cx.clearRect(0, 0, 1024, 300);
+  cx.fillStyle = 'rgba(20,24,28,0.78)';
+  cx.beginPath(); cx.roundRect(0, 0, 1024, 300, 40); cx.fill();
+  cx.fillStyle = '#fff';
+  cx.font = '600 50px system-ui, sans-serif';
+  cx.textAlign = 'center';
+  const lh = 62, y0 = 150 - (lines.length - 1) * lh / 2 + 17;
+  lines.forEach((l, i) => cx.fillText(l, 512, y0 + i * lh));
+  hintTex.needsUpdate = true;
+  hintTime = seconds;
+  hint.visible = xrActive() && xrMode === 'headset';
+}
+const headPos = new THREE.Vector3(), headDir = new THREE.Vector3();
+function updateHint(dt) {
+  if (!hint.visible) return;
+  hintTime -= dt;
+  if (hintTime <= 0 && dog.placed) { hint.visible = false; return; }
+  camera.getWorldPosition(headPos);
+  camera.getWorldDirection(headDir);
+  headDir.y = 0;
+  if (headDir.lengthSq() < 1e-4) return;
+  headDir.normalize();
+  const want = headPos.clone().addScaledVector(headDir, 1.1);
+  want.y = headPos.y - 0.2;
+  if (!hintPlaced) { hint.position.copy(want); hintPlaced = true; }
+  else hint.position.lerp(want, Math.min(1, dt * 2));
+  hint.lookAt(headPos);
+}
+
+// ---------- sound: a tiny synthesized "woof" ----------
+let actx = null;
+function initAudio() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) { actx = null; }
+}
+function bark() {
+  if (!actx) return;
+  const t0 = actx.currentTime;
+  const base = 360 / Math.sqrt(Math.max(0.4, dog.scale));
+  for (let k = 0; k < 2; k++) {
+    const t = t0 + k * 0.22;
+    const o = actx.createOscillator(), f = actx.createBiquadFilter(), g = actx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(base * 1.4, t);
+    o.frequency.exponentialRampToValueAtTime(base * 0.7, t + 0.12);
+    f.type = 'lowpass'; f.frequency.value = 1500;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(f).connect(g).connect(actx.destination);
+    o.start(t); o.stop(t + 0.16);
+  }
+}
+
+// ---------- photo → coat colors ----------
+function extractColors(img) {
+  const N = 48;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0, N, N);
+  const d = cx.getImageData(0, 0, N, N).data;
+  const border = [0, 0, 0]; let bc = 0;
+  const inner = [];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4, p = [d[i], d[i + 1], d[i + 2]];
+    if (x < 3 || y < 3 || x >= N - 3 || y >= N - 3) { border[0] += p[0]; border[1] += p[1]; border[2] += p[2]; bc++; }
+    else if (x > N * 0.15 && x < N * 0.85 && y > N * 0.15 && y < N * 0.85) inner.push(p);
+  }
+  const bg = border.map(v => v / bc);
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // k-means, k = 4
+  const K = 4;
+  let cents = Array.from({ length: K }, (_, k) => inner[Math.floor((k + 0.5) * inner.length / K)].slice());
+  let counts = new Array(K).fill(0);
+  for (let it = 0; it < 10; it++) {
+    const sums = Array.from({ length: K }, () => [0, 0, 0]);
+    counts = new Array(K).fill(0);
+    for (const p of inner) {
+      let best = 0, bd = Infinity;
+      for (let k = 0; k < K; k++) { const dd = dist(p, cents[k]); if (dd < bd) { bd = dd; best = k; } }
+      sums[best][0] += p[0]; sums[best][1] += p[1]; sums[best][2] += p[2]; counts[best]++;
+    }
+    cents = cents.map((c, k) => counts[k] ? sums[k].map(v => v / counts[k]) : c);
+  }
+  let order = cents.map((c, k) => ({ c, n: counts[k] })).filter(o => o.n > 0).sort((a, b) => b.n - a.n);
+  const notBg = order.filter(o => dist(o.c, bg) > 45);
+  if (notBg.length) order = notBg;
+  const main = order[0].c;
+  let accent = order.find(o => dist(o.c, main) > 40);
+  accent = accent ? accent.c : main.map(v => v * 0.55);
+  const hex = c => '#' + c.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+  return [hex(main), hex(accent)];
+}
+function setColors(main, accent) {
+  $('coat').value = main; $('accent').value = accent;
+  coatMat.color.set(main); accentMat.color.set(accent);
+}
+$('photo').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => {
+    $('thumb').src = url; $('thumb').style.display = 'block';
+    try { const [m, a] = extractColors(img); setColors(m, a); setStatus('Colors picked from your photo. Adjust them if they look off.'); }
+    catch (err) { setStatus('Could not read colors from that photo.'); }
+  };
+  img.src = url;
+});
+$('coat').addEventListener('input', e => coatMat.color.set(e.target.value));
+$('accent').addEventListener('input', e => accentMat.color.set(e.target.value));
+$('height').addEventListener('input', () => { $('heightLabel').textContent = heightCm(); applyScale(); });
+$('toggle').addEventListener('click', () => {
+  const ui = $('ui'); ui.classList.toggle('collapsed');
+  $('toggle').textContent = ui.classList.contains('collapsed') ? 'Show' : 'Hide';
+});
+
+// ---------- browser preview input ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let downAt = null, pettingDown = false;
+function setPointer(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+}
+function dogHit() {
+  if (!dog.placed) return null;
+  const hits = raycaster.intersectObject(dogRoot, true);
+  return hits.length ? hits[0].point : null;
+}
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (xrActive()) return;
+  initAudio();
+  setPointer(e);
+  downAt = { x: e.clientX, y: e.clientY };
+  const p = dogHit();
+  if (p) { pettingDown = true; controls.enabled = false; previewPet = p; }
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (xrActive() || !pettingDown) return;
+  setPointer(e);
+  previewPet = dogHit();
+});
+window.addEventListener('pointerup', e => {
+  if (xrActive()) return;
+  const wasPetting = pettingDown;
+  pettingDown = false; previewPet = null; controls.enabled = true;
+  if (!downAt || wasPetting) { downAt = null; return; }
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+  downAt = null;
+  if (moved > 6 || e.target !== renderer.domElement) return;
+  setPointer(e);
+  const hit = floorHit(raycaster.ray);
+  if (!hit) return;
+  if (!dog.placed) {
+    placeDog(hit);
+    if (camMode) setArHint('Tap the floor to call your dog · tap Throw ball · rub the dog to pet it');
+  } else goTo(hit, WALK);
+});
+function throwFromView() {
+  initAudio();
+  const inRoom = xrActive() || camMode;
+  if (!dog.placed) { if (inRoom) return; placeDog(new THREE.Vector3()); }
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  dir.y = 0;
+  if (dir.lengthSq() < 1e-4) dir.set(0, 0, -1);
+  dir.normalize();
+  const start = inRoom
+    ? camera.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 0.25).add(new THREE.Vector3(0, -0.15, 0))
+    : userPos().setY(floorY + 0.9);
+  ball.carried = false; ball.held = null; ball.active = true;
+  ball.pos.copy(start);
+  dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), (Math.random() - 0.5) * 0.5);
+  const speed = inRoom ? 1.8 + Math.random() * 0.8 : 2.6 + Math.random();
+  releaseBall(dir.multiplyScalar(speed).add(new THREE.Vector3(0, inRoom ? 1.8 : 2.2, 0)));
+}
+$('throwBtn').addEventListener('click', throwFromView);
+$('resetBtn').addEventListener('click', () => {
+  ball.active = false; ball.held = null; ball.carried = false;
+  if (xrActive() || camMode) { dog.placed = false; dogRoot.visible = false; if (xrMode === 'headset') showHint(HINT_PLACE, 999); return; }
+  placeDog(new THREE.Vector3());
+});
+
+// ---------- entering mixed reality ----------
+const xrBtn = $('xrBtn');
+const isHeadset = /OculusBrowser|Quest|Pico/i.test(navigator.userAgent);
+async function checkXR() {
+  const camOk = window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  let arOk = false, why = 'AR needs Chrome on an Android phone';
+  if (!window.isSecureContext) why = 'AR needs an https:// address';
+  else if (navigator.xr) {
+    try { arOk = await navigator.xr.isSessionSupported('immersive-ar'); }
+    catch (e) { why = 'AR is blocked on this page (open it from its own https:// address)'; }
+  }
+  if (arOk) { xrBtn.disabled = false; xrBtn.textContent = isHeadset ? 'Enter mixed reality' : 'Start AR'; }
+  else xrBtn.textContent = why;
+  if (!arOk && camOk) $('camBtn').style.display = 'block';
+}
+xrBtn.addEventListener('click', async () => {
+  initAudio();
+  try {
+    let session;
+    if (isHeadset) {
+      renderer.xr.setReferenceSpaceType('local-floor');
+      session = await navigator.xr.requestSession('immersive-ar', { requiredFeatures: ['local-floor'], optionalFeatures: ['hand-tracking'] });
+    } else {
+      renderer.xr.setReferenceSpaceType('local');
+      $('arOverlay').style.display = 'flex'; // the overlay root must be showing when AR starts
+      session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('arOverlay') },
+      });
+    }
+    xrMode = isHeadset ? 'headset' : 'phone';
+    session.addEventListener('end', onXREnd);
+    await renderer.xr.setSession(session);
+    if (xrMode === 'phone') {
+      const viewer = await session.requestReferenceSpace('viewer');
+      hitSource = await session.requestHitTestSource({ space: viewer });
+    }
+    onXRStart();
+  } catch (err) {
+    if (!xrActive()) $('arOverlay').style.display = 'none';
+    setStatus('Could not start AR: ' + (err && err.message ? err.message : err));
+  }
+});
+function onXRStart() {
+  scene.background = null;
+  grid.visible = false;
+  controls.enabled = false;
+  $('ui').style.display = 'none';
+  dog.placed = false; dogRoot.visible = false;
+  ball.active = false; ball.held = null; ball.carried = false;
+  hintPlaced = false;
+  floorY = 0;
+  if (xrMode === 'phone') { $('arOverlay').style.display = 'flex'; setArHint('Move your phone slowly over the floor'); }
+  else showHint(HINT_PLACE, 999);
+}
+function onXREnd() {
+  scene.background = previewBg;
+  grid.visible = true;
+  controls.enabled = true;
+  hint.visible = false;
+  $('ui').style.display = '';
+  $('arOverlay').style.display = 'none';
+  if (hitSource) { try { hitSource.cancel(); } catch (e) { /* already gone */ } }
+  hitSource = null; centerHit = null; phoneTouch = null; phonePet = null;
+  xrMode = null;
+  centerReticle.visible = false;
+  ball.held = null;
+  floorY = 0;
+  resetPreviewCamera();
+  placeDog(new THREE.Vector3());
+}
+
+// ---------- AR overlay buttons (phone AR and camera mode) ----------
+function setArHint(text) { if ($('arHint').textContent !== text) $('arHint').textContent = text; }
+$('arBtns').addEventListener('beforexrselect', e => e.preventDefault()); // button taps shouldn't also tap the scene
+$('arThrow').addEventListener('click', throwFromView);
+$('arCome').addEventListener('click', () => { if (dog.placed) goTo(pointNear(userPos(), dogRoot.position, 0.5 + 0.3 * dog.scale), TROT); });
+$('arSit').addEventListener('click', () => { if (dog.placed) { dog.state = 'sit'; dog.timer = 5; } });
+$('arExit').addEventListener('click', () => {
+  if (camMode) { stopCameraMode(); return; }
+  const s = renderer.xr.getSession();
+  if (s) s.end();
+});
+
+// ---------- iPhone fallback: camera feed + phone orientation ----------
+let camStream = null, devOri = null;
+const zee = new THREE.Vector3(0, 0, 1), devEuler = new THREE.Euler(), qZ = new THREE.Quaternion();
+const qX = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // camera looks out the back of the phone
+function onOrientation(e) { if (e.alpha !== null) devOri = { a: e.alpha, b: e.beta, g: e.gamma }; }
+function applyDeviceOrientation() {
+  if (!devOri) return;
+  const D = THREE.MathUtils.DEG2RAD;
+  const screenAngle = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * D;
+  devEuler.set(devOri.b * D, devOri.a * D, -devOri.g * D, 'YXZ');
+  camera.quaternion.setFromEuler(devEuler).multiply(qX).multiply(qZ.setFromAxisAngle(zee, -screenAngle));
+}
+async function startCameraMode() {
+  initAudio();
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') throw new Error('motion access was not allowed');
+    }
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    const v = $('camVideo');
+    v.srcObject = camStream;
+    await v.play();
+  } catch (err) {
+    if (camStream) camStream.getTracks().forEach(tr => tr.stop());
+    camStream = null;
+    setStatus('Could not start camera mode: ' + (err && err.message ? err.message : err));
+    return;
+  }
+  window.addEventListener('deviceorientation', onOrientation);
+  camMode = true;
+  devOri = null;
+  floorY = 0;
+  $('camVideo').style.display = 'block';
+  scene.background = null;
+  grid.visible = false;
+  controls.enabled = false;
+  $('ui').style.display = 'none';
+  $('arOverlay').style.display = 'flex';
+  camera.position.set(0, 1.3, 0);
+  camera.quaternion.setFromEuler(new THREE.Euler(-0.6, 0, 0));
+  dog.placed = false; dogRoot.visible = false;
+  ball.active = false; ball.held = null; ball.carried = false;
+  setArHint('Point your phone at the floor and tap to place your dog');
+}
+function stopCameraMode() {
+  camMode = false;
+  window.removeEventListener('deviceorientation', onOrientation);
+  if (camStream) camStream.getTracks().forEach(tr => tr.stop());
+  camStream = null;
+  $('camVideo').style.display = 'none';
+  $('arOverlay').style.display = 'none';
+  $('ui').style.display = '';
+  scene.background = previewBg;
+  grid.visible = true;
+  controls.enabled = true;
+  resetPreviewCamera();
+  placeDog(new THREE.Vector3());
+}
+$('camBtn').addEventListener('click', startCameraMode);
+
+window.addEventListener('resize', () => {
+  if (xrActive()) return;
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- main loop ----------
+// In the browser preview: 30 fps while you interact, 10 fps when nothing is moving, 0 when the tab is hidden.
+// On the Quest the headset sets the frame rate, so no cap there.
+let lastFrame = 0, lastInput = performance.now();
+['pointerdown', 'pointermove', 'wheel', 'keydown'].forEach(ev =>
+  window.addEventListener(ev, () => { lastInput = performance.now(); }, { passive: true }));
+const hitMat = new THREE.Matrix4();
+renderer.setAnimationLoop((time, frame) => {
+  const now = performance.now();
+  if (!xrActive()) {
+    if (document.hidden) return;
+    if ($('saver').checked) {
+      const calm = !camMode && now - lastInput > 8000 && dog.speed < 0.02 && !ball.held && !ball.carried && ball.vel.lengthSq() < 1e-4;
+      const fps = calm ? 10 : 30;
+      if (now - lastFrame < 1000 / fps - 1) return;
+    }
+  }
+  const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 1 / 60;
+  lastFrame = now;
+  const t = now / 1000;
+  if (camMode) applyDeviceOrientation();
+  else if (!xrActive()) controls.update();
+  centerHit = null;
+  if (frame && hitSource) {
+    const res = frame.getHitTestResults(hitSource);
+    const pose = res.length ? res[0].getPose(renderer.xr.getReferenceSpace()) : null;
+    if (pose) {
+      hitMat.fromArray(pose.transform.matrix);
+      if (hitMat.elements[5] > 0.75) centerHit = new THREE.Vector3().setFromMatrixPosition(hitMat); // only flat, upward surfaces
+    }
+  }
+  shadowFloor.position.y = floorY;
+  updateInputs();
+  updateDog(dt, t);
+  updateBall(dt);
+  updateHint(dt);
+  renderer.render(scene, camera);
+});
+
+// start: dog standing in the preview scene
+applyScale();
+placeDog(new THREE.Vector3());
+dog.popT = 1;
+checkXR();
+</script>
+</body>
+</html>
