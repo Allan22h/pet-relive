@@ -232,10 +232,19 @@ function buildDog() {
     const hip = pivot(hips, d.x, -0.01, d.z);
     part(new THREE.CapsuleGeometry(0.034, 0.11, 4, 10), coatMat, hip, 0, -0.08, 0);
     const knee = pivot(hip, 0, -0.155, 0);
-    part(new THREE.CapsuleGeometry(0.026, 0.11, 4, 10), coatMat, knee, 0, -0.075, 0);
-    const paw = part(new THREE.SphereGeometry(0.032, 12, 8), accentMat, knee, 0, -0.143, 0.012);
+    let hock = null, paw;
+    if (d.front) {
+      part(new THREE.CapsuleGeometry(0.026, 0.11, 4, 10), coatMat, knee, 0, -0.075, 0);
+      paw = part(new THREE.SphereGeometry(0.032, 12, 8), accentMat, knee, 0, -0.143, 0.012);
+    } else {
+      // back legs have a hock joint so they can fold flat when the dog sits
+      part(new THREE.CapsuleGeometry(0.028, 0.05, 4, 10), coatMat, knee, 0, -0.0425, 0);
+      hock = pivot(knee, 0, -0.085, 0);
+      part(new THREE.CapsuleGeometry(0.023, 0.045, 4, 10), coatMat, hock, 0, -0.037, 0);
+      paw = part(new THREE.SphereGeometry(0.032, 12, 8), accentMat, hock, 0, -0.075, 0.012);
+    }
     paw.scale.set(1, 0.6, 1.3);
-    return { ...d, hip, knee };
+    return { ...d, hip, knee, hock };
   });
 
   const backPt = pivot(hips, 0, 0.13, 0.2);
@@ -421,7 +430,9 @@ function updateDog(dt, t) {
   // pose: sit blend
   const sitTarget = dog.state === 'sit' ? 1 : 0;
   dog.sitW = THREE.MathUtils.damp(dog.sitW, sitTarget, 5, dt);
-  const sitW = dog.sitW, A = 0.425;
+  const sitW = dog.sitW;
+  // sitting: rump on the floor, body tilted ~41°, front legs straight, back legs folded flat (angles checked so paws touch the floor)
+  const SIT_TILT = 0.72, SIT_HIP_Y = 0.065;
 
   // gait
   const stride = 0.33 * s;
@@ -433,16 +444,19 @@ function updateDog(dt, t) {
     const swing = Math.sin(ph) * amp;
     const lift = Math.max(0, -Math.cos(ph)) * amp * 1.5;
     if (leg.front) {
-      leg.hip.rotation.x = swing * (1 - sitW) + A * sitW;
+      leg.hip.rotation.x = swing * (1 - sitW) + 0.48 * sitW;
       leg.knee.rotation.x = lift * (1 - sitW);
     } else {
-      leg.hip.rotation.x = swing * (1 - sitW) - 0.7 * sitW;
-      leg.knee.rotation.x = lift * (1 - sitW) + 2.0 * sitW;
+      leg.hip.rotation.x = (-0.35 + swing) * (1 - sitW) - 0.73 * sitW;
+      leg.hip.rotation.z = Math.sign(leg.x) * 0.22 * sitW; // thighs splay out a little when sitting
+      leg.knee.rotation.x = (0.95 + lift) * (1 - sitW) + 2.8 * sitW;
+      leg.hock.rotation.x = (-0.7 - lift * 0.8) * (1 - sitW) - 2.85 * sitW;
     }
   }
   const bob = Math.abs(Math.sin(dog.phase)) * 0.014 * amp;
-  model.hips.position.y = LEG - 0.165 * sitW + bob;
-  model.hips.rotation.x = -A * sitW;
+  model.hips.position.y = LEG + (SIT_HIP_Y - LEG) * sitW + bob;
+  model.hips.rotation.x = -SIT_TILT * sitW;
+  model.neck.rotation.x = 0.4 * sitW; // lean the neck forward so a sitting dog looks at you, not the sky
   const breathe = Math.sin(t * (dog.speed > 0.5 ? 9 : 2.2)) * 0.012;
   model.hips.children[0].scale.set(0.9 + breathe, 1, 1 + breathe);
 
@@ -450,7 +464,9 @@ function updateDog(dt, t) {
   const wagAmp = 0.12 + dog.happy * 0.55;
   model.tailSegs.forEach((seg, i) => {
     seg.rotation.y = Math.sin(dog.wagT - i * 0.7) * wagAmp * (i === 0 ? 1 : 0.6);
-    seg.rotation.x = i === 0 ? 0.45 + dog.happy * 0.45 : -0.18;
+    const standX = i === 0 ? 0.45 + dog.happy * 0.45 : -0.18;
+    const sitX = i === 0 ? SIT_TILT + 0.08 : 0; // tail rests on the floor and sweeps when it wags
+    seg.rotation.x = standX * (1 - sitW) + sitX * sitW;
   });
 
   // ears
