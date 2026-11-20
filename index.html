@@ -36,6 +36,16 @@
   .check { font-size: 13px; font-weight: 400; display: flex; gap: 8px; align-items: center; margin: 6px 0 0; }
   .section { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e8eb; }
   .section > b { font-size: 14px; }
+  .mstatus { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: #eef2f5; font-size: 13px; }
+  .mstatus.done { background: #e5f4e4; }
+  .mstatus.err { background: #fbebeb; }
+  .mstatus .mhead { display: flex; align-items: center; gap: 8px; }
+  .mstatus ol { margin: 6px 0 0; padding-left: 4px; list-style: none; color: #55606a; font-size: 12.5px; line-height: 1.6; }
+  .spin { width: 13px; height: 13px; border: 2px solid #b5c0c8; border-top-color: #2f6fde; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .ok-icon, .err-icon { width: 17px; height: 17px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; flex: none; }
+  .ok-icon { background: #2e8b47; } .ok-icon::before { content: '✓'; }
+  .err-icon { background: #c0392b; } .err-icon::before { content: '!'; }
   ul { margin: 6px 0 0; padding-left: 18px; }
 </style>
 <script type="importmap">
@@ -113,7 +123,11 @@
     <input id="modelFile" type="file" accept=".glb,.fbx">
     <div class="btns">
       <button id="turnBtn" disabled>Turn model 90°</button>
-      <button id="procBtn" disabled>Use simple dog</button>
+      <button id="procBtn" disabled>Remove model</button>
+    </div>
+    <div id="modelStatus" class="mstatus" hidden>
+      <div class="mhead"><span id="mIcon" class="spin"></span><b id="mTitle"></b></div>
+      <ol id="mSteps"></ol>
     </div>
     <div id="modelInfo" class="small">Load a rigged dog with walk / run / idle (and ideally sit) clips. Use in-place animations if you have the choice.</div>
 
@@ -488,7 +502,7 @@ const WALK = 0.75, TROT = 1.25, RUN = 2.6;
 
 // ---------- the pet's profile (saved on this device) ----------
 const profile = { name: '', energy: 0.6, age: 'adult', toy: 'tennis', tilt: true, zoom: false, follow: false, listen: false,
-                  coat: '#c8925a', accent: '#5a3a22', height: 50, bark: null };
+                  coat: '#c8925a', accent: '#5a3a22', height: 50, bark: null, modelTurns: 0 };
 function saveProfile() {
   try { localStorage.setItem('petRelive.profile', JSON.stringify(profile)); }
   catch (e) { /* storage full or blocked: keep working without saving */ }
@@ -772,23 +786,124 @@ function updateDog(dt, t) {
 const UNIT_HEIGHT = 0.63; // head-top height of the unscaled simple dog; loaded models are fitted to this
 const NOT_END = /end|nub|tip|top|_null/i;
 
+// ----- status box: shows each step while a model is processed, then ✓ Ready or ! Error -----
+const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); // let the screen update before heavy work
+function mStart(title) {
+  const b = $('modelStatus');
+  b.hidden = false; b.className = 'mstatus';
+  $('mIcon').className = 'spin';
+  $('mTitle').textContent = title;
+  $('mSteps').innerHTML = '';
+}
+function mFinishStep(mark) {
+  const li = $('mSteps').lastElementChild;
+  if (li) li.textContent = mark + ' ' + li.dataset.t;
+}
+function mStep(text) {
+  mFinishStep('✓');
+  const li = document.createElement('li');
+  li.dataset.t = text;
+  li.textContent = '… ' + text;
+  $('mSteps').appendChild(li);
+}
+function mProgress(frac) {
+  const li = $('mSteps').lastElementChild;
+  if (li) li.textContent = '… ' + li.dataset.t + ' ' + Math.round(frac * 100) + '%';
+}
+function mDone(title) { mFinishStep('✓'); $('modelStatus').className = 'mstatus done'; $('mIcon').className = 'ok-icon'; $('mTitle').textContent = title; }
+function mFail(title) { mFinishStep('✗'); $('modelStatus').className = 'mstatus err'; $('mIcon').className = 'err-icon'; $('mTitle').textContent = title; }
+
+// ----- keeping the model on this device (IndexedDB holds big files; it never leaves the phone) -----
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('petRelive', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('files');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbDo(mode, fn) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('files', mode), store = tx.objectStore('files');
+    let out;
+    const rq = fn(store);
+    if (rq) rq.onsuccess = () => { out = rq.result; };
+    tx.oncomplete = () => res(out);
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new Error('storage is full'));
+  });
+}
+const saveModel = (name, buf) => idbDo('readwrite', st => st.put({ name, buf, savedAt: Date.now() }, 'model'));
+const readModel = () => idbDo('readonly', st => st.get('model'));
+const forgetModel = () => idbDo('readwrite', st => st.delete('model'));
+
+function readFileWithProgress(file, onProg) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onprogress = e => { if (e.lengthComputable) onProg(e.loaded / e.total); };
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(fr.error || new Error('could not read the file'));
+    fr.readAsArrayBuffer(file);
+  });
+}
+const mb = n => (n / 1048576).toFixed(1) + ' MB';
+
 async function loadModelFile(file) {
-  const name = file.name.toLowerCase();
-  $('modelInfo').textContent = 'Loading ' + file.name + '…';
+  $('modelFile').disabled = true;
+  mStart('Processing ' + file.name + '…');
   try {
-    const buf = await file.arrayBuffer();
-    let obj, clips;
-    if (name.endsWith('.fbx')) {
-      obj = new FBXLoader().parse(buf, '');
-      clips = obj.animations || [];
-    } else {
-      const gltf = await new Promise((res, rej) => new GLTFLoader().parse(buf, '', res, rej));
-      obj = gltf.scene;
-      clips = gltf.animations || [];
-    }
-    setupMeshDog(obj, clips, file.name);
+    mStep('Reading the file (' + mb(file.size) + ')');
+    const buf = await readFileWithProgress(file, mProgress);
+    await loadModelBuffer(buf, file.name, true);
   } catch (err) {
-    $('modelInfo').textContent = 'Could not load that file: ' + (err && err.message ? err.message : err) + '. Use a single .glb, or an .fbx with embedded textures.';
+    mFail('Could not use this model');
+    $('modelInfo').textContent = (err && err.message ? err.message : String(err)) + '. Use a single .glb (textures inside), or an .fbx with embedded textures.';
+  } finally {
+    $('modelFile').disabled = false;
+  }
+}
+// parse, set up and (optionally) save; used for new files and for the saved copy at start-up
+async function loadModelBuffer(buf, name, save) {
+  mStep('Opening the 3D model');
+  await paint();
+  let obj, clips;
+  if (name.toLowerCase().endsWith('.fbx')) {
+    obj = new FBXLoader().parse(buf, '');
+    clips = obj.animations || [];
+  } else {
+    const gltf = await new Promise((res, rej) => new GLTFLoader().parse(buf, '', res, rej));
+    obj = gltf.scene;
+    clips = gltf.animations || [];
+  }
+  mStep('Finding its skeleton and animations');
+  await paint();
+  setupMeshDog(obj, clips, name);
+  if (!save) for (let i = 0; i < (profile.modelTurns || 0) % 4; i++) { meshDog.orient.rotation.y += Math.PI / 2; refitMeshDog(); } // the turn you chose last time
+  if (!save) { mDone('Ready: ' + name + ' (saved on this device)'); return; }
+  mStep('Saving it on this device');
+  await paint();
+  try {
+    await saveModel(name, buf);
+    profile.modelTurns = 0; saveProfile();
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* optional */ }
+    mDone('Ready: ' + name + ' — saved on this device');
+  } catch (e) {
+    mDone('Ready: ' + name + ' (couldn’t save it; you’ll need to load it again next time)');
+  }
+}
+async function restoreSavedModel() {
+  let rec = null;
+  try { rec = await readModel(); } catch (e) { return; }
+  if (!rec || !rec.buf) return;
+  mStart('Loading your saved dog…');
+  try {
+    mStep('Reading the saved copy (' + mb(rec.buf.byteLength) + ')');
+    await paint();
+    await loadModelBuffer(rec.buf, rec.name, false);
+  } catch (err) {
+    mFail('The saved model couldn’t be opened');
+    $('modelInfo').textContent = 'Load the .glb again to replace it.';
   }
 }
 
@@ -1022,10 +1137,15 @@ $('turnBtn').addEventListener('click', () => {
   if (!meshDog) return;
   meshDog.orient.rotation.y += Math.PI / 2;
   refitMeshDog();
+  profile.modelTurns = ((profile.modelTurns || 0) + 1) % 4; // remembered with the saved model
+  saveProfile();
 });
 $('procBtn').addEventListener('click', () => {
   removeMeshDog();
-  $('modelInfo').textContent = 'Back to the simple dog.';
+  forgetModel().catch(() => {});
+  profile.modelTurns = 0; saveProfile();
+  $('modelStatus').hidden = true;
+  $('modelInfo').textContent = 'Back to the simple dog. The saved model was removed from this device.';
 });
 
 // ---------- sleeping "z z z" ----------
@@ -1971,6 +2091,7 @@ applyScale();
 placeDog(new THREE.Vector3());
 dog.popT = 1;
 checkXR();
+restoreSavedModel(); // brings back the realistic dog saved on this device, if there is one
 </script>
 </body>
 </html>
