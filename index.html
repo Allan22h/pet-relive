@@ -787,7 +787,8 @@ const UNIT_HEIGHT = 0.63; // head-top height of the unscaled simple dog; loaded 
 const NOT_END = /end|nub|tip|top|_null/i;
 
 // ----- status box: shows each step while a model is processed, then ✓ Ready or ! Error -----
-const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); // let the screen update before heavy work
+// let the screen show the new step before heavy work (with a timeout, so it also continues if the app is in the background)
+const paint = () => new Promise(r => { let done = false; const go = () => { if (!done) { done = true; setTimeout(r, 0); } }; requestAnimationFrame(go); setTimeout(go, 60); });
 function mStart(title) {
   const b = $('modelStatus');
   b.hidden = false; b.className = 'mstatus';
